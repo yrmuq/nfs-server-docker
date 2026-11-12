@@ -31,7 +31,7 @@ if git rev-parse -q --verify "refs/tags/v${new}" >/dev/null; then
     exit 1
 fi
 
-git diff origin/main -- Dockerfile .github | python3 packaging/release/notes.py deps > notes.md
+git diff origin/main -- Dockerfile .github | sh packaging/release/notes.sh deps > notes.md
 export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-github-actions[bot]}"
 export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
 export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-$GIT_AUTHOR_NAME}"

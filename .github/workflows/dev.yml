@@ -27,7 +27,7 @@ jobs:
       - name: Test
         run: |
           sh tests/test_exports.sh
-          python3 -m unittest discover -s tests -p test_notes.py -v
+          sh tests/test_notes.sh
 
       - name: Confirm this commit is still dev
         run: |
