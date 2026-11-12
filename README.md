@@ -53,22 +53,25 @@ services:
 
   nfs_server:
     container_name: nfs_server
+    hostname: nfs_server
     image: ghcr.io/yrmuq/nfs-server-docker:latest
-    privileged: true
-    network_mode: host
     volumes:
       - /lib/modules:/lib/modules:ro
       - ${SHARE}:/storage
+      - ${ARCHIVE}:/storage/archive
     environment:
       TZ: ${TZ}
       NFS_EXPORTS: |
-        /storage ${ALLOWED_IP}(rw,async,insecure,all_squash,no_subtree_check,anonuid=1000,anongid=1000,fsid=0)
+        /storage ${ALLOWED_IP}(rw,async,insecure,all_squash,no_subtree_check,crossmnt,anonuid=1000,anongid=1000,fsid=0)
+        /storage/archive ${ALLOWED_IP}(rw,async,insecure,all_squash,no_subtree_check,anonuid=1000,anongid=1000,fsid=1)
+    privileged: true
+    restart: unless-stopped
     logging:
       driver: json-file
       options:
         max-size: "55m"
         max-file: "1"
-    restart: unless-stopped
+    network_mode: host
 ```
 
 `.env`:
@@ -76,10 +79,11 @@ services:
 ```dotenv
 TZ=UTC
 SHARE=/mnt/share
+ARCHIVE=/mnt/archive
 ALLOWED_IP=192.168.1.10
 ```
 
-`TZ` sets the container clock. `SHARE` is the host directory to export. The container sees it as `/storage`. `ALLOWED_IP` is the client allowed to mount it. `all_squash` writes every file as uid `1000` and gid `1000`. `fsid=0` makes `/storage` the path clients mount as `SERVER:/`. `insecure` allows a client whose source port is not privileged. A second host directory is a separate mount and needs its own export line with another `fsid`. Add `crossmnt` on the first line so a client can walk into that directory.
+`TZ` sets the container clock. `SHARE` is the host directory exported as `/storage`. `ARCHIVE` is a second host directory, mounted at `/storage/archive`. Each mount has its own export line and its own `fsid`. `crossmnt` on the first line lets a client walk from `/` into `archive`. `ALLOWED_IP` is the client allowed to mount them. `all_squash` writes every file as uid `1000` and gid `1000`. `insecure` allows a client whose source port is not privileged.
 
 ```bash
 docker compose pull
@@ -91,14 +95,16 @@ The same commands update a container that is already running. Replacing the cont
 | Container Path | Purpose |
 | --- | --- |
 | `/lib/modules` | Host kernel modules, read-only, so `modprobe` can load `nfs` and `nfsd`. |
-| `/storage` | Exported directory. The example bind-mounts `SHARE` here. |
+| `/storage` | First export, `fsid=0`. The example bind-mounts `SHARE` here. |
+| `/storage/archive` | Second export, `fsid=1`. The example bind-mounts `ARCHIVE` here. |
 
 ### Usage
 
-The export path must exist inside the container. Mount the share with NFSv4.2:
+The export paths must exist inside the container. Mount either share with NFSv4.2:
 
 ```bash
 mount -t nfs4 -o vers=4.2 SERVER:/ /mnt
+mount -t nfs4 -o vers=4.2 SERVER:/archive /mnt/archive
 ```
 
 ---
