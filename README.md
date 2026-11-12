@@ -7,12 +7,14 @@
 
 </div>
 
-An NFSv4.2 server in one container. It loads the host `nfs` and `nfsd` modules, then serves the export list from `NFS_EXPORTS`, so a separate init container and a Compose config are unnecessary. The image is Alpine with `nfs-utils` and keeps the server on TCP port `2049`.
-
 ---
 
 > [!NOTE]
 > This image is in active development. Behavior and the `NFS_EXPORTS` format can change between builds.
+
+---
+
+An NFSv4.2 server in one container. It loads the host `nfs` and `nfsd` modules, then serves the export list from `NFS_EXPORTS`, so a separate init container and a Compose config are unnecessary. The image is Alpine with `nfs-utils` and keeps the server on TCP port `2049`.
 
 ---
 
@@ -44,7 +46,7 @@ docker build -t ghcr.io/yrmuq/nfs-server-docker:local .
 
 ### Docker Compose
 
-`privileged` is required. The container loads `nfsd` and mounts it on `/proc/fs/nfsd`. One kernel NFS server can run on the host.
+`privileged` is required. The container loads `nfsd` and mounts it on `/proc/fs/nfsd`. `network_mode: host` places that server on the host address, so there is no `homelab` network and no published port. One kernel NFS server can run on the host.
 
 ```yaml
 services:
@@ -53,68 +55,48 @@ services:
     container_name: nfs_server
     image: ghcr.io/yrmuq/nfs-server-docker:latest
     privileged: true
-    ports:
-      - ${NFS_SERVER}:2049
+    network_mode: host
     volumes:
-      - ${NFS_MODULES}:/lib/modules:ro
-      - ${LOCATION}/docker/data/nfs:/storage
-      - ${LOCATION}/docker:/storage/docker
-      - ${HDD}/backups:/storage/backups
-      - ${HDD}/media:/storage/media
+      - /lib/modules:/lib/modules:ro
+      - /srv/share:/storage
     environment:
       - TZ=${TZ}
-      - NFS_EXPORTS=${NFS_EXPORTS}
+      - "NFS_EXPORTS=/storage *(rw,sync,no_subtree_check,insecure,fsid=0)"
     logging:
       driver: json-file
       options:
         max-size: "55m"
         max-file: "1"
     restart: unless-stopped
-    networks:
-      - homelab
-
-networks:
-  homelab:
-    external: true
 ```
 
 `.env`:
 
 ```dotenv
 TZ=UTC
-LOCATION=/home/user
-HDD=/mnt/hdd
-NFS_SERVER=2049
-NFS_MODULES=/lib/modules
-NFS_EXPORTS="/storage 192.168.1.100(rw,async,insecure,all_squash,no_subtree_check,crossmnt,anonuid=1000,anongid=1000,fsid=0)\n/storage/docker 192.168.1.100(rw,async,insecure,all_squash,no_subtree_check,anonuid=1000,anongid=1000,fsid=1)\n/storage/backups 192.168.1.100(rw,async,insecure,all_squash,no_subtree_check,anonuid=1000,anongid=1000,fsid=2)\n/storage/media 192.168.1.100(rw,async,insecure,all_squash,no_subtree_check,anonuid=1000,anongid=1000,fsid=3)"
 ```
 
-`TZ` sets the container clock. `NFS_SERVER` is the host port published to container port `2049`. `NFS_MODULES` is the host kernel module directory for the running kernel. `NFS_EXPORTS` is `/etc/exports` syntax. `\n` separates exports because the value is one line. `insecure` is required when the client source port is not privileged, which includes Docker NAT. `all_squash` writes files as uid `1000` and gid `1000`. `fsid=0` makes `/storage` the path clients mount as `SERVER:/`.
+`TZ` sets the container clock. `/srv/share` is an example host directory. The container sees it as `/storage`. `NFS_EXPORTS` is one line of `/etc/exports` syntax. `fsid=0` makes `/storage` the path clients mount as `SERVER:/`. `insecure` allows a client whose source port is not privileged.
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-The same commands update a container that is already running. Replacing the container does not change the host directories mounted into it.
+The same commands update a container that is already running. Replacing the container does not change the host directory mounted into it.
 
 | Container Path | Purpose |
 | --- | --- |
 | `/lib/modules` | Host kernel modules, read-only, so `modprobe` can load `nfs` and `nfsd`. |
-| `/storage` | NFSv4 root, `fsid=0`. |
-| `/storage/docker` | Docker data export. |
-| `/storage/backups` | Backups export. |
-| `/storage/media` | Media export. |
+| `/storage` | Exported directory. The example bind-mounts `/srv/share` here. |
 
 ### Usage
 
-Each export path must exist inside the container. Mount the share with NFSv4.2:
+The export path must exist inside the container. Mount the share with NFSv4.2:
 
 ```bash
 mount -t nfs4 -o vers=4.2 SERVER:/ /mnt
 ```
-
-`SERVER:/docker`, `SERVER:/backups`, and `SERVER:/media` are the other three exports.
 
 ---
 
