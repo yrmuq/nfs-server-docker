@@ -1,0 +1,102 @@
+# Copyright (C) 2026 yrmuq
+# SPDX-License-Identifier: GPL-3.0-or-later
+# A merge commit from dev into main raises Y, sets Z to 0, and publishes
+# that normal release. A squash or a direct commit does not.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  cut:
+    if: github.event.head_commit.id != ''
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Test
+        run: |
+          sh tests/test_exports.sh
+          python3 -m unittest discover -s tests -p test_notes.py -v
+
+      - name: Prepare version tag
+        id: tag
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -eu
+          ver="$(bash packaging/release/cut.sh | tail -n 1)"
+          case "$ver" in
+            [0-9]*.[0-9]*.0) echo "version=${ver}" >> "$GITHUB_OUTPUT" ;;
+            *) echo "version=" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.tag.outputs.version != ''
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.tag.outputs.version != ''
+
+      - uses: docker/login-action@v3
+        if: steps.tag.outputs.version != ''
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        if: steps.tag.outputs.version != ''
+        env:
+          IMAGE_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -eu
+          export GITHUB_SHA="$(git rev-parse HEAD)"
+          ver="${{ steps.tag.outputs.version }}"
+          bash packaging/image/build.sh \
+            "ghcr.io/yrmuq/nfs-server-docker:${ver}" \
+            "ghcr.io/yrmuq/nfs-server-docker:${GITHUB_SHA}" \
+            "ghcr.io/yrmuq/nfs-server-docker:latest"
+
+      - name: Publish without credentials
+        if: steps.tag.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          bash packaging/image/expose.sh "ghcr.io/yrmuq/nfs-server-docker:${sha}"
+
+      - name: Publish the release
+        if: steps.tag.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          ver="${{ steps.tag.outputs.version }}"
+          git push origin HEAD
+          git push origin "refs/tags/v${ver}"
+          gh release create "v${ver}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "nfs-server-docker ${ver}" \
+            --notes-file notes.md
+
+      - name: Sync published release into dev
+        if: steps.tag.outputs.version != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          bash packaging/release/sync-dev.sh
