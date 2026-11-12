@@ -1,0 +1,85 @@
+# Copyright (C) 2026 yrmuq
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Every push to dev builds the image and updates the dev draft.
+# The dev tag is not a stable release and does not move latest.
+
+name: Development build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  image:
+    if: github.ref == 'refs/heads/dev'
+    concurrency:
+      group: dev-image
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: |
+          sh tests/test_exports.sh
+          python3 -m unittest discover -s tests -p test_notes.py -v
+
+      - name: Confirm this commit is still dev
+        run: |
+          git fetch origin dev
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/dev)"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        env:
+          IMAGE_VERSION: dev
+        run: |
+          bash packaging/image/build.sh \
+            "ghcr.io/yrmuq/nfs-server-docker:dev" \
+            "ghcr.io/yrmuq/nfs-server-docker:${GITHUB_SHA}"
+
+      - name: Confirm the published commit
+        run: |
+          git fetch origin dev
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/dev)"
+
+      - name: Publish without credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash packaging/image/expose.sh "ghcr.io/yrmuq/nfs-server-docker:${GITHUB_SHA}"
+
+      - name: Update the development draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          git fetch origin dev
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/dev)"
+          printf '%s\n' "Development build from dev. Not a release." \
+            "Commit: $GITHUB_SHA" \
+            "ghcr.io/yrmuq/nfs-server-docker:dev" \
+            "ghcr.io/yrmuq/nfs-server-docker:$GITHUB_SHA" > notes.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh release delete dev --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          git tag -a dev -m "$(cat notes.md)"
+          git push origin refs/tags/dev
+          gh release create dev \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --title "nfs-server-docker dev" \
+            --notes-file notes.md

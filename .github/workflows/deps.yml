@@ -1,0 +1,118 @@
+# Copyright (C) 2026 yrmuq
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Dependabot does not land on main. The pull request is closed. The commits
+# are on deps, as the next prerelease, for a manual merge into dev.
+
+name: Dependency prerelease
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+concurrency:
+  group: dependency-prerelease
+  cancel-in-progress: false
+
+jobs:
+  prerelease:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Keep earlier dependency updates
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -eu
+          git config user.name "$GIT_AUTHOR_NAME"
+          git config user.email "$GIT_AUTHOR_EMAIL"
+          git fetch origin main
+          pr="${{ github.event.pull_request.head.sha }}"
+          if git fetch origin deps; then
+            git checkout -B deps origin/deps
+            if ! git merge --no-ff "$pr" -m "Merge dependency update."; then
+              git checkout --ours VERSION
+              git add VERSION
+              if git diff --name-only --diff-filter=U | grep -q .; then
+                echo "dependency merge conflict is not limited to VERSION" >&2
+                exit 1
+              fi
+              git commit -m "Merge dependency update."
+            fi
+          else
+            git checkout -B deps "$pr"
+          fi
+
+      - name: Test
+        run: |
+          sh tests/test_exports.sh
+          python3 -m unittest discover -s tests -p test_notes.py -v
+
+      - name: Tag the next prerelease
+        id: tag
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          ver="$(bash packaging/release/prerelease.sh | tail -n 1)"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        env:
+          IMAGE_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -eu
+          export GITHUB_SHA="$(git rev-parse HEAD)"
+          ver="${{ steps.tag.outputs.version }}"
+          bash packaging/image/build.sh \
+            "ghcr.io/yrmuq/nfs-server-docker:${ver}" \
+            "ghcr.io/yrmuq/nfs-server-docker:${GITHUB_SHA}"
+
+      - name: Publish without credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          bash packaging/image/expose.sh "ghcr.io/yrmuq/nfs-server-docker:${sha}"
+
+      - name: Publish and close the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          ver="${{ steps.tag.outputs.version }}"
+          git push origin HEAD:refs/heads/deps
+          git push origin "refs/tags/v${ver}"
+          gh release create "v${ver}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --prerelease \
+            --title "nfs-server-docker ${ver}" \
+            --notes-file notes.md
+          gh pr close "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" \
+            --comment "Prerelease [${ver}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${ver}) is ready to try. \`main\` was not changed. Merge branch \`deps\` into \`dev\` by hand. Do not merge this pull request into \`main\`."
