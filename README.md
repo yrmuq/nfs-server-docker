@@ -100,12 +100,27 @@ The same commands update a container that is already running. Replacing the cont
 
 ### Usage
 
-The export paths must exist inside the container. Mount either share with NFSv4.2:
+The export paths must exist inside the container. On the client, create the mount points and open `/etc/fstab`:
 
 ```bash
-mount -t nfs4 -o vers=4.2 SERVER:/ /mnt
-mount -t nfs4 -o vers=4.2 SERVER:/archive /mnt/archive
+sudo mkdir -p /mnt /mnt/archive
+sudo nano /etc/fstab
 ```
+
+Add these lines. Replace `SERVER` with the address of the machine that runs the container.
+
+```text
+SERVER:/ /mnt nfs4 vers=4.2,_netdev 0 0
+SERVER:/archive /mnt/archive nfs4 vers=4.2,_netdev 0 0
+```
+
+Apply the table now:
+
+```bash
+sudo mount -a
+```
+
+`_netdev` waits for the network. After a reboot the client reads `/etc/fstab` and mounts both paths again. No further mount command is required while the server is reachable.
 
 ---
 
