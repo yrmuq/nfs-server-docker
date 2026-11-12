@@ -58,10 +58,11 @@ services:
     network_mode: host
     volumes:
       - /lib/modules:/lib/modules:ro
-      - /srv/share:/storage
+      - ${SHARE}:/storage
     environment:
-      - TZ=${TZ}
-      - "NFS_EXPORTS=/storage *(rw,sync,no_subtree_check,insecure,fsid=0)"
+      TZ: ${TZ}
+      NFS_EXPORTS: |
+        /storage ${ALLOWED_IP}(rw,async,insecure,all_squash,no_subtree_check,anonuid=1000,anongid=1000,fsid=0)
     logging:
       driver: json-file
       options:
@@ -74,9 +75,11 @@ services:
 
 ```dotenv
 TZ=UTC
+SHARE=/mnt/share
+ALLOWED_IP=192.168.1.10
 ```
 
-`TZ` sets the container clock. `/srv/share` is an example host directory. The container sees it as `/storage`. `NFS_EXPORTS` is one line of `/etc/exports` syntax. `fsid=0` makes `/storage` the path clients mount as `SERVER:/`. `insecure` allows a client whose source port is not privileged.
+`TZ` sets the container clock. `SHARE` is the host directory to export. The container sees it as `/storage`. `ALLOWED_IP` is the client allowed to mount it. `all_squash` writes every file as uid `1000` and gid `1000`. `fsid=0` makes `/storage` the path clients mount as `SERVER:/`. `insecure` allows a client whose source port is not privileged. A second host directory is a separate mount and needs its own export line with another `fsid`. Add `crossmnt` on the first line so a client can walk into that directory.
 
 ```bash
 docker compose pull
@@ -88,7 +91,7 @@ The same commands update a container that is already running. Replacing the cont
 | Container Path | Purpose |
 | --- | --- |
 | `/lib/modules` | Host kernel modules, read-only, so `modprobe` can load `nfs` and `nfsd`. |
-| `/storage` | Exported directory. The example bind-mounts `/srv/share` here. |
+| `/storage` | Exported directory. The example bind-mounts `SHARE` here. |
 
 ### Usage
 
